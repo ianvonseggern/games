@@ -1,0 +1,1 @@
+chess.py contains all the 'rules' of chess which allow you to implement a client however you want, a command line one, or a gui.
