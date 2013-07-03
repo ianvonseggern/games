@@ -1,5 +1,3 @@
-import unittest
-
 class Location(object):
   row_range = range(8)
   col_range = range(8)
@@ -11,8 +9,8 @@ class Location(object):
     self.col = col
 
   @classmethod
-  def in_range(self, row, col):
-    return row in self.row_range and col in self.col_range
+  def in_range(cls, row, col):
+    return row in cls.row_range and col in cls.col_range
 
   def __eq__(self, other_location):
     return self.row == other_location.row and self.col == other_location.col
@@ -24,6 +22,12 @@ class Color(object):
   black = 'BLACK'
   white = 'WHITE'
 
+  @staticmethod
+  def opposite(clr):
+    if clr == Color.black:
+      return Color.white
+    return Color.black
+
 class Piece(object):
   def __init__(self, location = Location(), color = Color.black,
                name = 'DEFAULT', letter = 'D'):
@@ -31,6 +35,7 @@ class Piece(object):
     self.color = color
     self.name = name
     self.letter = letter
+    self.move_count = 0
 
   def legal_moves(self, board):
     return []
@@ -41,7 +46,32 @@ class Piece(object):
     p.name = self.name
     p.letter = self.letter
     p.location = Location(self.location.row, self.location.col)
+    p.move_count = self.move_count
     return p
+
+  def direction(self):
+    """
+    White starts at the 0th row and moves toward the 7th row, so
+    it is +1, Black starts at the 7th and moves toward 0th so it is -1.
+    """
+    return 1 if self.color == Color.white else -1 
+
+  def row(self, x):
+    """
+    Normalizes rows for white versus black, so x is the number of rows from
+    the starting side, and the row returned is the actual index into the
+    board.
+    e.x. If it is a white piece row(1) returns 1 because 1 is the second row
+    on the white side.
+    If it is a black piece row(1) returns 6 because 6 is the second row on the
+    black side.
+    """
+    direction = self.direction()
+    if direction == 1:
+      return x
+    else:
+      return 7 - x
+
 
   def __str__(self):
     return self.color + ' ' + self.name + ' at ' + str(self.location)
@@ -54,6 +84,7 @@ class Board(object):
   def __init__(self):
     self.turn = Color.white
     self.pieces = self.reset_pieces()
+    self.history = []
 
   def reset_pieces(self):
     pieces = []
@@ -111,13 +142,19 @@ class Board(object):
     if capture_piece:
       new_board.pieces.remove(capture_piece)
     # Move piece
-    new_board.at_location(start_location).location = end_location
+    move_piece = new_board.at_location(start_location)
+    move_piece.move_count += 1
+    move_piece.location = end_location
+    # Update turn and piece history
+    new_board.turn = Color.opposite(self.turn)
+    new_board.history.append(self.pieces)
     return new_board
 
   def copy(self):
     rtn = Board()
     rtn.pieces = []
     rtn.turn = self.turn
+    rtn.history = self.history
     for piece in self.pieces:
       rtn.pieces.append(piece.copy())
     return rtn
@@ -150,18 +187,6 @@ class Board(object):
   def __hash__(self):
     return str(self).__hash__()
 
-class TestBoard(unittest.TestCase):
-  def test_equals(self):
-    a = Board()
-    b = Board()
-    self.assertEqual(a, b)
-
-    a = Board()
-    b = Board()
-    a.turn = Color.white
-    b.turn = Color.black
-    self.assertFalse(a == b)
-
 class Pawn(Piece):
   def __init__(self, location = Location(), color = Color.black):
     super(Pawn, self).__init__(location, color, 'Pawn', 'P' if color == Color.white else 'p')
@@ -170,90 +195,51 @@ class Pawn(Piece):
     rtn = []
     col = self.location.col
     # First move can go two
-    if (self.location.row == 1 and not board.at_location(Location(2,col)) and
-        not board.at_location(Location(3,col))):
-      rtn.append(board.move(self.location, Location(3, col)))
+    if (self.location.row == self.row(1) and
+        not board.at_location(Location(self.row(2),col)) and
+        not board.at_location(Location(self.row(3),col))):
+      rtn.append(board.move(self.location, Location(self.row(3), col)))
     # Move forward one
-    row = self.location.row + 1
+    row = self.location.row + self.direction()
     col = self.location.col
     if (Location.in_range(row, col) and
         not board.at_location(Location(row, col))):
-      if row < 7:
+      if row != self.row(7):
         rtn.append(board.move(self.location, Location(row, col)))
       else:
         rtn.extend(self.pawn_upgrade(board, self.location,
                                      Location(row, col)))
     # Captures
     for col_delta in [-1, 1]:
-      row = self.location.row + 1
       col = self.location.col + col_delta 
       if Location.in_range(row, col):
         capture_piece = board.at_location(Location(row, col))
         if capture_piece and capture_piece.color != self.color:
-          if row < 7:
+          if row != self.row(7):
             rtn.append(board.move(self.location,
                                   Location(row, col)))
           else:
             rtn.extend(self.pawn_upgrade(board, self.location,
                                          Location(row, col)))
-    # Enpasant TODO
+      # En Passant
+      if self.location.row == self.row(4):
+        piece = board.at_location(Location(self.location.row, col))
+        if piece.name == Pawn.name and piece.move_count == 1:
+          new_board = board.move(self.location, Location(row, col))
+          captured_piece = new_board.at_location(Location(self.location.row, col))
+          new_board.piece.remove(captured_piece)
+          rtn.append(new_board) 
     return rtn
 
-  def pawn_upgrade(board, old_location, new_location):
+  def pawn_upgrade(self, board, old_location, new_location):
     rtn = []
     for piece in [Pawn, Bishop, Rook, Knight, Queen]:
       new_board = board.move(old_location, new_location)
       new_piece = new_board.at_location(new_location)
       new_board.pieces.remove(new_piece)
-      new_baord.pieces.append(piece(Location(new_location)))
+      new_board.pieces.append(piece(Location(new_location)))
       rtn.append(new_board)
     return rtn
-
-class TestPawn(unittest.TestCase):
-  def test_basic_move(self):
-    b = Board()
-    p = Pawn(Location(2, 2))
-    b.pieces = [p]
-    test_moves = p.legal_moves(b)
-
-    new_b = Board()
-    new_b.pieces = [Pawn(Location(3, 2))]
-    actual_moves = [new_b]
-
-    self.assertEqual(set(test_moves), set(actual_moves))
-
-  def test_blocked_move(self):
-    b = Board()
-    black_pawn = Pawn(Location(2, 2), Color.black)
-    white_pawn = Pawn(Location(3, 2), Color.white)
-    b.pieces = [black_pawn, white_pawn]
-    test_moves = black_pawn.legal_moves(b)
-
-    actual_moves = []
-
-    self.assertEqual(set(test_moves), set(actual_moves))
-
-  def test_first_move(self):
-    b = Board()
-    p = Pawn(Location(1, 2))
-    b.pieces = [p]
-    test_moves = p.legal_moves(b)
-
-    new_b1 = Board()
-    new_b1.pieces = [Pawn(Location(3, 2))]
-    new_b2 = Board()
-    new_b2.pieces = [Pawn(Location(2, 2))]
-    actual_moves = [new_b1, new_b2]
-
-    self.assertEqual(set(test_moves), set(actual_moves))
-
-#  def test_edge(self):
-
-#  def test_capture(self):
-
-#  def test_upgrade(self):
-
-#  def test_upgrade_capture(self):
 
 class Rook(Piece):
   def __init__(self, location = Location(), color = Color.black):
@@ -358,7 +344,10 @@ class King(Piece):
           new_king = new_board.at_location(Location(r, c))
           if not new_king.in_check(new_board):
             rtn.append(new_board)
-    # Castling TODO
+    # Castling (TODO)
+    #if self.move_count == 0:
+    #  for loc in [Location(self.row(0),0), Location(self.row(0),7)]:
+        
     return rtn
 
   def in_check(self, board):
@@ -369,19 +358,19 @@ class King(Piece):
     as that would infinite loop, instead check his position manually).
     """
     oppenent_pieces = [x for x in board.pieces if (x.color != self.color and
-                                                   x.name != King.name)]
+                                                   x.name != self.name)]
     moves = []
     for p in oppenent_pieces:
       moves.extend(p.legal_moves(board))
 
     for move in moves:
       if not len([1 for x in move.pieces if (x.color == self.color and
-                                             x.name == King.name)]):
+                                             x.name == self.name)]):
         return True
 
     # For experimentation it can be helpful to have 0 or multiple kings
     oppenent_kings = [x for x in board.pieces if (x.color != self.color and
-                                                 x.name == King.name)]
+                                                 x.name == self.name)]
     for oppenent_king in oppenent_kings:
       if (abs(oppenent_king.location.row - self.location.row) < 2 and
           abs(oppenent_king.location.col - self.location.col) < 2):
@@ -389,14 +378,12 @@ class King(Piece):
     
     return False
 
-    
+if __name__ == "__main__":
+  b = Board()
+  b.pieces = [King(Location(2, 1), Color.black),
+              King(Location(0, 0), Color.white)]
+  p = b.at_location(Location(2, 1))
+  moves = p.legal_moves(b)
+  for move in moves:
+    print move
 
-b = Board()
-b.pieces = [King(Location(2, 1), Color.black),
-            King(Location(0, 0), Color.white)]
-p = b.at_location(Location(2, 1))
-moves = p.legal_moves(b)
-for move in moves:
-  print move
-
-unittest.main()
